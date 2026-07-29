@@ -1,0 +1,103 @@
+---
+title: "GAWE_DB"
+author: "Magdalena"
+date: "2026-01-07"
+output: html_document
+---
+##script to convert wav an corresponding TextGRid files to emu db 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries
+```{r}
+library(tidyverse)
+library(emuR)
+library(wrassp)
+library(ggplot2)
+```
+## create source directory (where source files are stored)
+```{r}
+sourceDir <- "C:/Users/magdi/OneDrive/Desktop/ipsR/all"
+```
+##define target Directory (where to store the db)
+```{r}
+targetDir <- "C:/Users/magdi/OneDrive/Desktop/ipsR/emu_databases"
+```
+
+
+#list files
+```{r}
+list.files(sourceDir)
+```
+
+#Convert Collection of TextGrids to EmuDB format
+```{r}
+convert_TextGridCollection(sourceDir, 
+                           dbName = "all",
+                           targetDir = targetDir,
+                           verbose = FALSE)
+```
+#create DB 
+```{r}
+DB <- load_emuDB(file.path(targetDir, "all_emuDB"),
+                       verbose = FALSE)
+```
+#show summary of DB
+```{r}
+summary(DB)
+```
+#open DB in websocket
+```{r}
+serve(DB, useViewer = FALSE)
+```
+
+## Praat TextGrid files do not establish a hierarchy --> therfore requerying is not possible --> autobuilding hierarchies between each annotation layer (step by step)
+## you may need to close the websocket and serve again in order for it to be shown correctly
+## Pay attention to the hierarchies!! (overlapping segments need MANY_TO_MANY)
+
+##1 word-->phon
+```{r}
+# add linkDefinition as one has to be present for
+# the autobuild function to work
+add_linkDefinition(emuDBhandle = DB,
+type = "ONE_TO_MANY",
+superlevelName = "word",
+sublevelName = "phon")
+
+# envoke autobuild function to build hierarchy for converted TextGridCollection
+autobuild_linkFromTimes(emuDBhandle = DB,
+superlevelName = "word",
+sublevelName = "phon",
+convertSuperlevel = FALSE)
+```
+##2 phon-->Phone
+```{r}
+# add linkDefinition as one has to be present for
+# the autobuild function to work
+add_linkDefinition(emuDBhandle = DB,
+type = "ONE_TO_MANY",
+superlevelName = "phon",
+sublevelName = "dur")
+
+# envoke autobuild function to build hierarchy for converted TextGridCollection
+autobuild_linkFromTimes(emuDBhandle = DB,
+superlevelName = "phon",
+sublevelName = "dur",
+convertSuperlevel = FALSE)
+```
+
+##3 Phone --> dur
+```{r}
+add_linkDefinition(emuDBhandle = DB,
+type = "ONE_TO_MANY",
+superlevelName = "dur",
+sublevelName = "voice")
+
+# envoke autobuild function to build hierarchy for converted TextGridCollection
+autobuild_linkFromTimes(emuDBhandle = DB,
+superlevelName = "dur",
+sublevelName = "voice",
+convertSuperlevel = FALSE)
+```

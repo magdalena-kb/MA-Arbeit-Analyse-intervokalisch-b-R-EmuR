@@ -1,0 +1,660 @@
+---
+title: "intensity_test"
+author: "Magdalena"
+date: "2026-05-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#install.packages("sjPlot")
+library(tidyverse)
+library(emuR)
+library(wrassp)
+library(ggplot2)
+#library(MASS)
+library(dplyr)
+#library(rms)
+library(stringr)
+library(performance)
+library(car)
+library(ordinal)
+library(emmeans)
+library(sjPlot)
+```
+
+```{r}
+targetDir <- "C:/Users/magdi/OneDrive/Desktop/ipsR/emu_databases"
+```
+#load emuDB
+```{r}
+DB <- load_emuDB(file.path(targetDir, "all_emuDB"),
+                       verbose = FALSE)
+list_ssffTrackDefinitions(DB)
+```
+
+#add track definition for intensity 
+#this only has to be executed once 
+```{r}
+#remove_ssffTrackDefinition(DB, "intensity", deleteFiles = TRUE)
+add_ssffTrackDefinition(DB,
+                    "intensity",
+                     onTheFlyFunctionName = "rmsana")
+#list_ssffTrackDefinitions(DB)
+```
+
+#list formals of rmsana
+```{r}
+formals("rmsana")
+```
+
+#query all consonants from DB
+```{r}
+cons_all = query(DB, "dur = C")
+cons_all<- requery_hier(DB, 
+                    seglist = cons_all, 
+                    level = "voice")
+cons_all<- cons_all %>% filter(labels!="EL")
+cons_all<-requery_hier(DB, 
+                    seglist = cons_all, 
+                    level = "phon")
+cons_int = get_trackdata(DB, cons_all, "intensity")
+view(cons_int)
+```
+
+#exclude deleted consonants (elision)
+```{r}
+cons = query(DB, "dur = C")
+cons<- requery_hier(DB, 
+                    seglist = cons, 
+                    level = "voice")
+cons<- cons %>% filter(labels!="EL")
+
+```
+
+#cleanup
+```{r}
+#this was cleanup
+cons$labels <- str_replace(cons$labels, "[?]", "")
+cons$labels <- str_replace(cons$labels, "VFRIC", "VDFRIC")
+cons$labels <- str_replace(cons$labels, "VDRFIC", "VDFRIC")
+cons$labels <- str_replace(cons$labels, "VDRIC", "VDFRIC")
+cons$labels <- str_replace(cons$labels, "VCLO", "VDCLO")
+cons$labels <- str_replace(cons$labels, "REL(.)", "REL")
+#all_param <- all_param[-c(152),]
+view(all_param)
+```
+
+#add column for voice
+```{r}
+
+#add column for voice (has 3 categories (voiced/partially voiced/voiceless))
+cons$Voice <- ifelse(cons$labels == "VDFRIC" |cons$labels == "APPR"| cons$labels == "VDCLO->REL", "voiced",
+                         ifelse(cons$labels == "VLFRIC" |cons$labels == "VLCLO->REL", "voiceless", "partiallyvoiced"))
+#view(cons)
+sum_voice<- cons |> group_by(Voice, ) |> summarise(n=n())
+view(sum_voice)
+
+```
+
+#query v2
+```{r}
+v2 = query(DB, "dur = V2 | nV2")
+v2<-requery_hier(DB, 
+                    seglist = v2, 
+                    level = "voice")
+v2_rms <- get_trackdata(DB, v2, "intensity")
+
+view(v2_rms)
+```
+
+#query v1
+```{r}
+v1 = query(DB, "dur = V1|nV1")
+v1<-requery_hier(DB, 
+                    seglist = v1, 
+                    level = "voice")
+v1_rms = get_trackdata(DB, v1, "intensity")
+##view(v1_rms)
+```
+
+#select minimum int value for cons (in order to calculate ratio (hch is vmax-cmin))
+```{r}
+min_cons<- cons_int%>% group_by(bundle, labels) %>%
+  summarise(T1 = min(T1))%>%
+  rename(T1_c=T1)%>%
+  ungroup()
+##view(min_cons)
+```
+
+#select max int value for v2
+```{r}
+max_v2<- v2_rms %>% group_by(bundle, labels) %>%
+  summarise(T1 = max(T1))%>%
+  rename(T1_v=T1)%>%
+  ungroup()
+##view(max_v2)
+```
+
+#select max int value for v1
+```{r}
+max_v1<- v1_rms %>% group_by(bundle, labels) %>%
+  summarise(T1 = max(T1))%>%
+  rename(T1_v=T1)%>%
+  ungroup()
+##view(max_v1)
+```
+
+#merge min_cons and max_v2
+```{r}
+int_ratio <- merge(min_cons, max_v2, by="bundle")
+int_ratio<- int_ratio %>%
+  rename(phon=labels.x, v2=labels.y, T1_v2=T1_v)
+##view(int_ratio)
+```
+
+#merge v1
+```{r}
+int_ratio <- merge(int_ratio, max_v1[c("T1_v", "bundle")], by="bundle")
+int_ratio<- int_ratio %>%
+ rename(T1_v1=T1_v)
+##view(int_ratio)
+```
+
+# calculate VCR (both with v2 (VCR) and v1 (VCR_v1))
+```{r}
+int_ratio<- int_ratio%>% mutate(VCR=T1_v2 - T1_c)
+int_ratio<- int_ratio%>% mutate(VCR_v1=T1_v1 - T1_c)
+#int_ratio<- int_ratio[order(int_ratio$VCR),]
+#view(int_ratio)
+
+```
+
+```{r}
+int_ratio_voice <- merge(int_ratio, cons, by="bundle")
+#view(int_ratio_voice)
+sum_voice<- int_ratio_voice |> group_by(Voice, phon) |> summarise(n=n())
+#view(sum_voice)
+```
+
+#trim white space
+```{r}
+int_ratio$phon <- trimws(int_ratio$phon)
+```
+
+#plot relationship between VCR and VCR_v1 to test if they corelate (the should and do)--> both are probably fine?
+# maybe v2 is slightly better, because there are less liquides after than preceeding
+```{r}
+ggplot(int_ratio, aes(x=VCR, y=VCR_v1)) + geom_point() + geom_smooth() +geom_smooth(method = "loess",
+              formula = y ~ x, col="#9966FF") + theme_bw()+ labs(x= "VCR (V2)", y="VCR (V1)")
+```
+```{r}
+ggplot(all_param, aes(x=T1_v2, y=T1_v1)) + geom_point() + geom_smooth() +geom_smooth(method = "loess",
+              formula = y ~ x, col="#9966FF") + theme_bw()+ labs(x= "Intensität V2", y="Intensität V1")
+cor.test(all_param$T1_v1, all_param$T1_v2, alternative = "greater")
+```
+
+#violin plot and boxplot of rel dur per phon
+```{r}
+ggplot(all_param, aes(x = phon.x, y = dur_rel)) +
+  geom_violin( color="#339966") +
+  labs(x="Realisierung") +
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  theme_bw()
+```
+
+#violin plot and boxplot of VCR per phon
+```{r}
+ggplot(int_ratio, aes(x = phon, y = VCR)) +
+  geom_violin( color="#339966") +
+  labs(x="Realisierung") +
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  theme_bw()
+```
+
+# v2 slightly lower in all measures
+```{r}
+summary(int_ratio$VCR)
+summary(int_ratio$VCR_v1)
+```
+
+# load rel_dur and V_C_ratio csvs
+```{r}
+rel_dur<- read.csv("C:/Users/magdi/OneDrive/Desktop/ipsR/data/rel_dur.csv")
+rel_dur$phon <- trimws(rel_dur$phon)
+#view(rel_dur)
+VC_ratio<- read.csv("C:/Users/magdi/OneDrive/Desktop/ipsR/data/VC_ratio.csv")
+VC_ratio$phon <- trimws(VC_ratio$phon)
+#view(VC_ratio)
+```
+
+#merge them all together
+```{r}
+all_param <- merge(int_ratio, VC_ratio, by="bundle")
+all_param <- merge(all_param, rel_dur[c("bundle", "dur_rel")], by="bundle")
+#all_param <- all_param %>% 
+  #select("bundle", "phon.x", "phon.y", "T1_c", "T1_v", "VCR", "VC_duration", "V_C_ratio", "word", "dur_rel")
+all_param <-merge(all_param, cons[c("bundle", "Voice")], by="bundle")
+all_param$phon.x <- factor(all_param$phon.x, levels=c( "β̞", "β", "b") ,ordered = TRUE)
+levels(all_param$phon.x)
+all_param$v2 <- factor(all_param$v2)
+#levels(all_param$v2)
+all_param$Voice <- factor(all_param$Voice, levels=c("voiced", "partiallyvoiced", "voiceless"), ordered = TRUE)
+view(all_param)
+```
+
+#plot VCR as violinplot by speaker
+```{r}
+ggplot(all_param, aes(x = phon.x, y = VCR)) +
+  geom_violin( color="#339966") +
+  labs(x="Realisierung") +
+  facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  theme_bw()
+```
+
+# boxplot with jitter
+```{r}
+ggplot(all_param, aes(x = Voice, y = VCR)) +
+  #geom_violin( color="#339966") +
+  labs(x="Varianten nach Stimmhaftigkeit") +
+  facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+    geom_jitter(position=position_jitter(0.2), color="#339966")+
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  theme_bw()
+```
+
+#plot relative duration as scatterplot
+```{r}
+ggplot(all_param, aes(x = phon.x, y = dur_rel)) +
+  #geom_violin( color="#339966") +
+     facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_point(color="#9966FF")+
+   stat_summary(
+   geom = "point",
+   fun = "mean",
+  col = "#339966",
+   size = 3,
+   shape = 24,
+   fill = "#339966"
+  )+
+  labs(y="relative Konsonantendauer", x="Variante")+
+  theme_bw()
+```
+#plot VCratio as scatterplot
+```{r}
+ggplot(all_param, aes(x = phon.x, y = V_C_ratio)) +
+  #geom_violin( color="#339966") +
+     facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_point(color="#9966FF")+
+   stat_summary(
+   geom = "point",
+   fun = "mean",
+  col = "#339966",
+   size = 3,
+   shape = 24,
+   fill = "#339966"
+  )+
+  labs(y="VCratio", x="Variante")+
+  theme_bw()
+```
+
+#plot VCR a scatterplot
+```{r}
+ggplot(all_param, aes(x = phon.x, y = VCR)) +
+  #geom_violin( color="#339966") +
+     facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_point(color="#9966FF")+
+   stat_summary(
+   geom = "point",
+   fun = "mean",
+  col = "#339966",
+   size = 3,
+   shape = 24,
+   fill = "#339966"
+  )+
+  labs(y="VCR (dB)", x="Variante")+
+  theme_bw()
+```
+
+#plot VCratio as boxplot with jitter
+```{r}
+ggplot(all_param, aes(x = phon.x, y = V_C_ratio)) +
+  #geom_violin( color="#339966") +
+     facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_jitter(position=position_jitter(0.2), color="#339966")+
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  labs(y="VCratio", x="Realisierung")+
+  theme_bw()
+```
+
+
+#plot violinplot of VCVratio (not needed)
+```{r}
+ggplot(all_param, aes(x = phon.x, y = VCV_ratio)) +
+  geom_violin( color="#339966") +
+     facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  labs(y="VCratio", x="Realisierung")+
+  theme_bw()
+```
+
+
+#standardisation 
+```{r}
+all_param$VCR_v1_st <- (all_param$VCR_v1 - mean(all_param$VCR_v1)) / sd(all_param$VCR_v1)
+all_param$VCR_st <- (all_param$VCR - mean(all_param$VCR)) / sd(all_param$VCR)
+all_param$V_C_ratio_st <- (all_param$V_C_ratio - mean(all_param$V_C_ratio)) / sd(all_param$V_C_ratio)
+all_param$dur_rel_st <- (all_param$dur_rel - mean(all_param$dur_rel)) / sd(all_param$dur_rel)
+view(all_param)
+```
+
+#plot violinplot for voice (not needed)
+```{r}
+ggplot(all_param, aes(x = Voice, y = VCR_v1)) +
+  geom_violin( color="#339966") +
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  labs(x="Realisierung") +
+  facet_wrap(~phon.x)+
+  theme_bw()
+```
+
+#plot duration of preceeding vowel
+```{r}
+all_param %>%
+ggplot(aes(x = phon.x, y = v1_dur)) +
+  geom_violin( color="#339966") +
+  geom_boxplot(width = 0.2, fill = "white", color = "#9966FF")+
+  facet_wrap(~session)+
+  labs(x="Realisierung", y= "Dauer des vorangegangenen Vokals") +
+  theme_bw()
+```
+
+```{r}
+sum<- all_param |> group_by(session, phon.x) |> summarise(n=n())
+#view(sum)
+
+```
+
+#calculate rel frequencies for voice
+```{r}
+voice_frq <-all_param %>%
+  group_by(session, phon.x) %>%   # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Voice, phon.x, session)%>%  # Then group by subgroup (am)
+    dplyr::summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+show(voice_frq)
+```
+
+#plot relative frequencies for voice
+```{r}
+voice_frq %>%
+  ggplot(aes(x= phon.x, y=freq_within_Set, fill=Voice))+
+    geom_col(position="stack")+
+    facet_wrap(~session, labeller = labeller(session = 
+    c("_0283_TUX_jungII" = "283: TUX, jung, m",
+      "_0356_PASS_jungII" = "356: PASS, jung, w",
+      "_0541_GAWE_jungII" = "541: GAWE, jung, m")))+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="Variante")
+
+```
+
+# scatterplot of realisierungen 
+```{r}
+#view(all_param)
+ggplot(all_param, aes(x=VCR_st, y=dur_rel_st, color=phon.x, shape = session)) + geom_point()+
+  labs(x="VCR (standardisiert)", y="relative Konsonantendauer (standardisiert)")+
+  scale_color_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+  #geom_smooth(method = "loess",
+             # formula = y ~ x, col="#9966FF")+
+  theme_bw()
+
+cor.test(all_param$VCR_st, all_param$dur_rel_st, alternative="greater", method="pearson")
+cor.test(spk0283$VCR_st, spk0283$dur_rel_st, alternative="greater")
+cor.test(spk0541$VCR_st, spk0541$dur_rel_st, alternative="greater")
+cor.test(spk0356$VCR_st, spk0356$dur_rel_st, alternative="greater")
+```
+
+
+```{r}
+all_param <- all_param %>% mutate(phon_num = as.numeric(phon.x))
+view(all_param)
+```
+
+
+#filter by speaker in order to fit individual models
+```{r}
+spk0356 <- all_param %>%
+  filter(grepl("0356", bundle))
+view(spk0356)
+
+spk0283 <- all_param %>%
+  filter(grepl("0283", bundle))
+#view(spk0283)
+
+spk0541 <- all_param %>%
+  filter(grepl("0541", bundle))
+#view(spk0541)
+```
+
+##Erklärung Variablen: 
+#VCR_v1: Vowel consonant itensity ratio mit V1
+#VCR_v2: Vowel consonant itensity ratio mit V2
+#V_C_ratio:duration_phon / VC_duration
+#dur_rel:duration_phon / VCV_duration
+#_st: standardisiert 
+
+
+
+
+#test to see if categories behave ordinally
+```{r}
+plot.xmean.ordinaly(phon.x~VCR, data = spk0541)
+```
+
+#test with a linear model significance of v2 on VCR (not significant)
+```{r}
+table(all_param$v2)
+all_param["v2"][all_param["v2"]=="lˈ"] <- "li"
+
+all_param$v2<- factor(all_param$v2)
+all_param <- all_param%>% filter(v2 != "V2")
+m_VCR <- lm(VCR ~ v2, data = all_param)
+summary(m_VCR)
+
+```
+
+
+
+#correlation tests (Spearman's rank correlation rho)
+```{r}
+cor.test(spk0283$dur_rel_st,spk0283$phon_num, method="spearman", exact = FALSE, alternative="greater")
+cor.test(spk0541$dur_rel_st,spk0541$phon_num, method="spearman", exact = FALSE, alternative="greater")
+cor.test(spk0356$dur_rel_st,spk0356$phon_num, method="spearman", exact = FALSE, alternative="greater")
+
+cor.test(spk0283$VCR_st, spk0283$phon_num,method="spearman", exact = FALSE, alternative="greater")
+cor.test(spk0541$VCR_st, spk0541$phon_num,method="spearman", exact = FALSE, alternative="greater")
+cor.test(spk0356$VCR_st,spk0356$phon_num, method="spearman", exact = FALSE, alternative="greater")
+```
+
+# correlation test for VCratio (Spearman's rank correlation rho)
+```{r}
+cor.test(spk0283$V_C_ratio, spk0283$phon_num,method="spearman", exact = FALSE, alternative="less")
+cor.test(spk0541$V_C_ratio, spk0541$phon_num,method="spearman", exact = FALSE, alternative="less")
+cor.test(spk0356$V_C_ratio, spk0356$phon_num, method="spearman", exact = FALSE, alternative="less")
+```
+
+
+#models 
+```{r}
+m_0283 <- clm(phon.x ~ VCR_st + dur_rel_st, data = spk0283)
+summary(m_0283)
+m_0541 <- clm(phon.x ~ VCR_st + dur_rel_st, data = spk0541)
+summary(m_0541)
+m_0356 <- clm(phon.x ~ VCR_st + dur_rel_st, data = spk0356)
+summary(m_0356)
+```
+
+#LRTs
+```{r}
+m_0283_null <- clm(phon.x ~1, data = spk0283)
+m_0283_v2 <- clm(phon.x ~ dur_rel_st, data = spk0283)
+m_0283_v1 <- clm(phon.x ~ VCR_st, data = spk0283)
+anova(m_0283_v1, m_0283)
+anova(m_0283_v2, m_0283)
+anova(m_0283_null, m_0283)
+```
+
+```{r}
+m_0541_null <- clm(phon.x ~1, data = spk0541)
+m_0541_v2 <- clm(phon.x ~ dur_rel_st, data = spk0541)
+m_0541_v1 <- clm(phon.x ~ VCR_st, data = spk0541)
+anova(m_0541_v1, m_0541)
+anova(m_0541_v2, m_0541)
+anova(m_0541_null, m_0541)
+```
+
+```{r}
+m_0356_null <- clm(phon.x ~1, data = spk0356)
+m_0356_v2 <- clm(phon.x ~ dur_rel_st, data = spk0356)
+m_0356_v1 <- clm(phon.x ~ VCR_st, data = spk0356)
+anova(m_0356_v1, m_0356)
+anova(m_0356_v2, m_0356)
+anova(m_0356_null, m_0356)
+```
+
+
+# predicted probabilities per speaker
+```{r}
+emmeans(m_0541, pairwise ~VCR_st, adjust="none")
+ref_grid(m_0541)
+plot_model(m_0541, type="emm", terms="dur_rel [all]", title= "Prognostizierte Wahrscheinlichkeit der Varianten (GP 541)", axis.title= c("relative Konsonantendauer","Wahrscheinlichkeit der Variante"))
+```
+
+```{r}
+emmeans(m_0356, pairwise ~VCR_st, adjust="none")
+ref_grid(m_0356)
+plot_model(m_0356, type="emm", terms="dur_rel [all]", title= "Prognostizierte Wahrscheinlichkeit der Varianten (GP 356)", axis.title= c("relative Konsonantendauer","Wahrscheinlichkeit der Variante"))
+```
+
+```{r}
+emmeans(m_0283, pairwise ~VCR_st, adjust="none")
+ref_grid(m_0283)
+plot_model(m_0283, type="emm", terms="dur_rel [all]", title= "Prognostizierte Wahrscheinlichkeit der Varianten (GP 283)", axis.title= c("relative Konsonantendauer","Wahrscheinlichkeit der Variante"))
+```
+
+
+#some more tests (maybe investigate what these mean lol)
+```{r}
+emmeans(m_0283, ~VCR_st, adjust="none")
+emmeans(m_0283, ~cut|VCR_st, mode="linear.predictor")
+
+emtrends(m_0283, var="VCR_st", specs= ~VCR_st, infer=T)
+tab_model(m_0283)
+tab_model(m_0541)
+tab_model(m_0356)
+```
+
+#fit models for voice
+```{r}
+v_0541 <- clm(Voice ~ VCR_st, data = spk0541)
+summary(v_0541)
+
+v_0356 <- clm(Voice ~ VCR_st, data = spk0356)
+summary(v_0356)
+v_0283 <- clm(Voice ~ VCR_st, data = spk0283)
+summary(v_0283)
+```
+
+#calculate mean for VCR
+```{r}
+# Specify data frame
+group_mean <- all_param %>%
+    # Specify group indicator, column, function
+    group_by(phon.x) %>%
+    # Calculate the mean of the "Frequency" column for each group
+    summarise_at(vars(VCR),
+                 list(Mean_VCR = mean))
+
+# Print the resulting summary data frame
+print(group_mean)
+
+```
+
+#calculate mean for rel dur
+```{r}
+# Specify data frame
+group_mean <- all_param %>%
+    # Specify group indicator, column, function
+    group_by(phon.x) %>%
+    # Calculate the mean of the "Frequency" column for each group
+    summarise_at(vars(dur_rel),
+                 list(Mean_reldur = mean))
+
+# Print the resulting summary data frame
+print(group_mean)
+```
+
+#calculate  means and sd
+```{r}
+ag_vcr<- aggregate(VCR ~ phon.x, all_param, function(x) c(mean = mean(x), sd = sd(x)))
+view(ag_vcr)
+ag_vcr1<- aggregate(VCR ~ Voice, all_param, function(x) c(mean = mean(x), sd = sd(x)))
+view(ag_vcr1)
+ag_reldur<- aggregate(dur_rel ~ phon.x, all_param, function(x) c(mean = mean(x), sd = sd(x)))
+view(ag_reldur)
+ag_VCratio<- aggregate(V_C_ratio ~ phon.x, all_param, function(x) c(mean = mean(x), sd = sd(x)))
+view(ag_VCratio)
+```
+
+#descriptive statistics for variants 
+```{r}
+plo <- all_param %>%
+  filter(phon.x=="b")
+fric <- all_param %>%
+  filter(phon.x=="β")
+appr <- all_param %>%
+  filter(phon.x=="β̞")
+
+summary(plo$duration_phon)
+summary(fric$duration_phon)
+summary(appr$duration_phon)
+summary(plo$v1_dur)
+summary(fric$v1_dur)
+summary(appr$v1_dur)
+```
+
+
+#summary voice
+```{r}
+sum_voice<- all_param |> group_by(phon.x, Voice) |> summarise(n=n())
+view(sum_voice)
+```
+

@@ -1,0 +1,161 @@
+---
+title: "Analysis1"
+author: "Magdalena"
+date: "2026-01-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Load Libraries
+```{r}
+library(tidyverse)
+library(emuR)
+library(wrassp)
+library(ggplot2)
+```
+
+```{r}
+targetDir <- "C:/Users/magdi/OneDrive/Desktop/ipsR/emu_databases"
+```
+
+
+```{r}
+DB <- load_emuDB(file.path(targetDir, "all_emuDB"),
+                       verbose = FALSE)
+serve(DB, useViewer = FALSE)
+```
+# shows all labels in dur tier (i.e.V1, C, V2)
+```{r}
+allVC <- query(DB, "[dur =~ .*]", )
+allVC <- allVC %>%filter(labels== "V1" |labels == "nV1" |labels=="C")
+#view(allVC)
+```
+
+## requerying
+```{r}
+phon_V1_C <- requery_hier(DB, 
+                    seglist = allVC, 
+                    level = "phon")
+phon_V1_C <- phon_V1_C %>%rename(phon=labels)
+phon_V1_C <- phon_V1_C %>%mutate(uid=paste(as.character(start), bundle))
+view(phon_V1_C)
+```
+
+
+#compute duration of V1, C
+```{r}
+allVC <- allVC %>%mutate(uid=paste(as.character(start), bundle))
+dur_allVC <- allVC %>% mutate(duration_phon = case_when(labels == "" ~ NA, 
+                                    labels != "" ~ end-start))
+dur_allVC <- dur_allVC %>%rename(V_C=labels)
+view(dur_allVC)
+```
+
+#compute word length
+```{r}
+word_length <- query(DB, query= "word=~ .*")
+word_length_dur <- word_length %>% 
+  mutate(duration_word = case_when(labels == "" ~ NA, 
+                                    labels != "" ~ end-start))%>%
+  filter(labels!= "" )%>%
+  rename(word=labels)
+view(word_length_dur)
+view(word_length)
+```
+
+#merging tables so that every table has the duration of the respective word dur as well as phon dur
+
+```{r}
+word_phon_dur <- dur_allVC %>%
+left_join(dplyr::select(word_length_dur, bundle, duration_word, word), by = "bundle")
+head(word_phon_dur)
+write.csv(word_phon_dur, "C:/Users/magdi/OneDrive/Desktop/ipsR/data/dur_phon.csv") ##table incl. V1 and C, phon, phon_dur
+```
+
+
+```{r}
+word_phon_dur <- word_phon_dur %>%
+  left_join(dplyr::select(phon_V1_C, phon, uid), by = "uid")
+head(word_phon_dur)
+```
+
+## create table with just consonants
+```{r}
+allC <- word_phon_dur %>% 
+  dplyr::select(V_C, phon, bundle, duration_phon, duration_word, session, uid) %>% 
+  filter(V_C=="C")
+allC<- na.omit(allC)
+#head(allC)
+#view(allC)
+```
+## create table with just vowels (V1) 
+```{r}
+allV <- word_phon_dur %>% 
+  dplyr::select(V_C, word, phon, bundle, duration_phon, duration_word, uid )%>% 
+  filter(V_C=="V1"| V_C=="nV1")
+allV<- na.omit(allV)
+#head(allV)
+#view(allV)
+```
+
+#calculate VCV_duration
+```{r}
+allV1 <- query(DB, "[dur =V1| nV1]" )
+allV1<- na.omit(allV1)
+allV2 <- query(DB, "[dur =V2| nV2]")
+allV2<- na.omit(allV2)
+view(allV1)
+view(allV2)
+dur_VCV <- allC %>% mutate(VCV_duration = c((allV2$end - allV1$start)))
+V1_dur<- allV  %>% mutate(phon_C=c(allC$phon))
+view(V1_dur)
+#head(dur_VCV)
+view(dur_VCV)
+```
+
+
+```{r}
+dur_VC <- word_phon_dur %>%
+  filter(V_C=="C") 
+dur_VC <- dur_VC %>%
+  mutate(VC_duration = c((dur_VC$end - allV1$start)))
+#view(dur_VC)
+```
+
+
+
+##calculate VCratio (V /VC) as Kleber (2018)
+```{r}
+V_C_ratio <- dur_VC %>%  
+  mutate(V_C_ratio = c((allV$duration_phon / dur_VC$VC_duration)))%>%  
+  mutate(v1_dur = c(V1_dur$duration_phon))%>%  
+  mutate(VCV_ratio = c(allV$duration_phon / dur_VCV$VCV_duration))
+view(V_C_ratio)
+write.csv(V_C_ratio, "C:/Users/magdi/OneDrive/Desktop/ipsR/data/VC_ratio.csv", row.names=FALSE)
+```
+
+# calculate relative sound duration
+```{r}
+rel_dur <- dur_VCV %>%  mutate(dur_rel = c(allC$duration_phon / dur_VCV$VCV_duration))
+view(rel_dur)
+write.csv(rel_dur, "C:/Users/magdi/OneDrive/Desktop/ipsR/data/rel_dur.csv", row.names=FALSE)
+```
+
+#save the tables and do graphs in another script!
+
+```{r}
+allC$phon <- trimws(allC$phon)
+dur_VCV$phon <- trimws(allC$phon)
+rel_dur$phon <- trimws(rel_dur$phon)
+V1_dur$phon_C<- trimws(V1_dur$phon_C)
+```
+
+```{r}
+rel_dur <- rel_dur %>% filter(phon !="0")
+ggplot(rel_dur, aes(x=phon, y=dur_rel)) + geom_boxplot()+
+  labs(x="Realisierung", y= "Relative Konsonantendauer") +
+  theme_bw()
+```
+

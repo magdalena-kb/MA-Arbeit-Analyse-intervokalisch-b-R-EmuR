@@ -1,0 +1,646 @@
+---
+title: "analysis_auditiv"
+author: "Magdalena"
+date: "2026-05-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("scales")
+#install.packages("lmtest")
+#install.packages("gt")
+library(tidyverse)
+library(wrassp)
+library(ggplot2)
+library(scales) 
+library(ordinal)
+library(lme4)
+library(lmtest)
+library(gtsummary)
+library(gt)
+library(stats)
+```
+
+#load csv as df 
+```{r}
+#rm(list=ls(all.names=TRUE))
+summary(x <- read.table(file="C:/Users/magdi/OneDrive/Dokumente/Studium/Deutsche Philologie/MASTER Deutsche Philologie/MA Arbeit/daten/Auswertung_04_vollst.csv",
+header=TRUE, sep=";", quote="", comment.char="",
+stringsAsFactors=TRUE))
+view(x)
+```
+
+#load kontrollierte Sprachdaten
+```{r}
+#rm(list=ls(all.names=TRUE))
+summary(x1 <- read.table(file="C:/Users/magdi/OneDrive/Dokumente/Studium/Deutsche Philologie/MASTER Deutsche Philologie/MA Arbeit/daten/kontrl_daten.csv",
+header=TRUE, sep=";", quote="", comment.char="",
+stringsAsFactors=TRUE))
+view(x1)
+```
+
+
+#clean up
+```{r}
+clean_df <- subset(x, select = -c(X, X.1, X.2, X.3, Akustisch))
+view(clean_df)
+```
+
+#calculate  sums 
+```{r}
+sum_df<- clean_df |> group_by(Setting) |> summarise(n=n())
+sum_var<- clean_df |> group_by(Realisierung) |> summarise(n=n())
+words<- clean_df |> group_by(Belegwort) |> summarise(n=n())
+sum_V2<- clean_df |> group_by(V2_TAG) |> summarise(n=n())
+sum_V1<- clean_df |> group_by(V1_TAG) |> summarise(n=n())
+sum_dialektal<- clean_df |> group_by(V1_Dialektal, Setting) |> summarise(n=n())
+sum_ort<- clean_df |> group_by(Ort) |> summarise(n=n())
+sum_Lexem<- clean_df |> group_by(Lexem) |> summarise(n=n())
+view(sum_Lexem)
+```
+#add level for V1_dialektal (so that we can add "Nein" and dont have NA values)
+```{r}
+levels(clean_df$V1_Dialektal) <- c(levels(clean_df$V1_Dialektal), "nein")
+#view(sum_dialektal)
+#droplevels(clean_df$V1_Dialektal)
+```
+
+# add columns for region, age, gender
+```{r}
+clean_df$Ort <- ifelse(clean_df$GP == 268|clean_df$GP == 274|clean_df$GP == 280|clean_df$GP == 283, "TUX",
+                         ifelse(clean_df$GP == 366|clean_df$GP == 354|clean_df$GP == 356|clean_df$GP == 371, "PASS", "GAWE"))
+clean_df["V1_Dialektal"][clean_df["V1_Dialektal"]==""] <- "nein"
+clean_df$Gender<- ifelse(clean_df$GP == 268|clean_df$GP == 274|clean_df$GP == 356|clean_df$GP == 366|clean_df$GP == 544|clean_df$GP == 524, "w", "m")
+clean_df$Alter<- ifelse(clean_df$GP == 283|clean_df$GP == 274|clean_df$GP == 356|clean_df$GP == 371|clean_df$GP == 544|clean_df$GP == 541, "jung", "alt")
+clean_df$V1_TAG <- ifelse(clean_df$V1_TAG == "high", "geschlossen", ifelse(clean_df$V1_TAG=="low", "offen", ifelse(clean_df$V1_TAG=="mid", "mittel", "Liquid")))
+clean_df$V2_TAG <- ifelse(clean_df$V2_TAG == "high", "geschlossen", ifelse(clean_df$V2_TAG=="low", "offen", ifelse(clean_df$V2_TAG=="mid", "mittel", "Liquid")))
+clean_df$Alter <- factor(clean_df$Alter)
+clean_df$Ort <- factor(clean_df$Ort)
+clean_df$Gender <- factor(clean_df$Gender)
+clean_df$GP <- factor(clean_df$GP)
+clean_df$Realisierung <- factor(clean_df$Realisierung, levels=c("b" ,"β", "β̞") ,ordered = TRUE)
+levels(clean_df$Realisierung )
+view(clean_df)
+```
+
+#add column for lexemes 
+```{r}
+clean_df$Belegwort<- as.character(clean_df$Belegwort)
+clean_df$Lexem <- ifelse(clean_df$Belegwort=="habe ich", "habe",
+clean_df$Lexem <- ifelse(clean_df$Belegwort=="glaube ich", "glaube",
+clean_df$Lexem <- ifelse(clean_df$Belegwort=="aber", "aber", 
+clean_df$Lexem <- ifelse(clean_df$Belegwort=="über", "über", 
+clean_df$Lexem <- ifelse(grepl("arbeit", clean_df$Belegwort,ignore.case = TRUE), "arbeit-", 
+clean_df$Lexem <- ifelse(grepl("liebe", clean_df$Belegwort,ignore.case = TRUE), "lieber",
+clean_df$Lexem <- ifelse(grepl("über.", clean_df$Belegwort, ignore.case = TRUE), "über-", 
+clean_df$Lexem <- ifelse(grepl("selbe", clean_df$Belegwort,ignore.case = TRUE), "selber",
+clean_df$Lexem <- ifelse(grepl("Hobby", clean_df$Belegwort,ignore.case = TRUE), "hobby(s)",
+clean_df$Lexem <- ifelse(grepl("ober", clean_df$Belegwort, ignore.case = TRUE), "ober-",NA))))))))))
+view(clean_df)
+```
+
+#view/summarise lexemes to get most frequent words 
+```{r}
+lexemes<- clean_df |> group_by(Lexem) |> summarise(n=n())
+write.csv(lexemes,"C:/Users/magdi/OneDrive/Dokumente/Studium/Deutsche Philologie/MASTER Deutsche Philologie/MA Arbeit/daten/lexeme.csv" )
+#view(lexemes)
+```
+
+
+#plot relative Frequencies overall
+```{r}
+freq_data <- clean_df %>%
+  group_by(Realisierung) %>%              # Group by cylinder category
+  summarize(count = n(), .groups = "drop") %>%  # Count observations per group
+  mutate(
+    freq = count / sum(count),   # Frequency = count / total observations
+    freq_label = percent(freq)   # Optional: Format as percentage (e.g., "34%")
+  )
+view(freq_data)
+```
+
+
+##calculate rel. Freqs per Gp and Setting
+```{r}
+set_frq <- clean_df %>%
+  group_by(GP, Setting) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(GP,Setting, Realisierung)%>%  # Then group by subgroup (am)
+    dplyr::summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+set_frq$Gender<- ifelse(set_frq$GP == 268|set_frq$GP == 274|set_frq$GP == 356|set_frq$GP == 366|set_frq$GP == 544|set_frq$GP == 524, "w", "m")
+set_frq$Alter<- ifelse(set_frq$GP == 283|set_frq$GP == 274|set_frq$GP == 356|set_frq$GP == 371|set_frq$GP == 544|set_frq$GP == 541, "jung", "alt")
+show(set_frq)
+```
+
+##plot absolute Freq per GP and Setting
+```{r}
+clean_df$Realisierung<- trimws(clean_df$Realisierung)
+clean_df %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting))+
+  geom_bar(aes(fill=Realisierung))+
+  facet_wrap(~GP)+
+  theme_bw()+
+  labs(x="Realisierung")
+
+```
+
+##plot rel. frequencies per GP and Setting
+```{r}
+set_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+    facet_wrap(~GP+Alter+Gender)+
+    theme_bw()+
+  scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 2)+
+    labs(y="relative Häufigkeit")
+
+```
+
+
+#calculate Frequencies per Setting
+```{r}
+set_frq <- clean_df %>%
+ # filter(Lexem != "aber") %>%
+  group_by(Setting) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Setting, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+show(set_frq)
+```
+
+#plot frequencies per Setting
+```{r}
+set_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+  scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+  theme_bw()+
+   geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 5)+
+    labs(y="relative Häufigkeit")
+
+
+```
+#Calculate frequencies per age
+```{r}
+age_frq <- clean_df %>%
+  group_by(Alter, Setting) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Alter, Setting, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+show(age_frq)
+```
+
+#plot frequencies per age
+```{r}
+age_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+    facet_wrap(~Alter)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+  geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit")
+
+```
+#calculate frequencies per Ort
+```{r}
+ort_frq <- clean_df %>%
+  group_by(Ort, Setting) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Ort, Setting, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    ) #%>%
+  #mutate( freq_within_Set = percent(freq_within_Set))
+#grouped_frq$freq_within_Set <- format(round(grouped_frq$freq_within_Set, 2), nsmall = 2)
+show(ort_frq)
+```
+
+
+#plot frequencies per region
+```{r}
+ort_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+    facet_wrap(~Ort)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit")
+
+```
+#calculate frequencies per Gender
+```{r}
+gen_frq <- clean_df %>%
+  #filter(GP !="280", GP!="283") %>%
+  group_by(Gender, Setting) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Gender, Setting, Realisierung)%>%  # Then group by subgroup (am)
+    dplyr::summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    ) #%>%
+  #mutate( freq_within_Set = percent(freq_within_Set))
+#grouped_frq$freq_within_Set <- format(round(grouped_frq$freq_within_Set, 2), nsmall = 2)
+show(gen_frq)
+
+sum_gen<- clean_df |> group_by(Gender) |> summarise(n=n())
+view(sum_gen)
+```
+
+
+#plot frequencies per Gender
+```{r}
+gen_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= Setting, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+    facet_wrap(~Gender)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit")
+
+```
+
+#calculate frequencies per Haupttonvokal
+```{r}
+ht_frq <- clean_df %>%
+  group_by(V1_Dialektal) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(V1_Dialektal,Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    ) #%>%
+  #mutate( freq_within_Set = percent(freq_within_Set))
+#grouped_frq$freq_within_Set <- format(round(grouped_frq$freq_within_Set, 2), nsmall = 2)
+show(ht_frq)
+```
+#plot frequencies per Gender
+```{r}
+ht_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= V1_Dialektal, y=freq_within_Set, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~V1_Dialektal)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Set, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="dialektaler Haupttonvokal (ja/nein)")
+
+```
+
+
+#calcualte rel. frequencies for lexemes
+```{r}
+lex_frq <- clean_df %>%
+  group_by(Lexem) %>%  # Group by x-variable first
+    mutate(total_per_Lex = n()) %>%  # Total observations per x-category
+    group_by(Lexem, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Lex = count / first(total_per_Lex), # freq within x-category
+      .groups = "drop",
+    ) #%>%
+  #mutate( freq_within_Set = percent(freq_within_Set))
+#grouped_frq$freq_within_Set <- format(round(grouped_frq$freq_within_Set, 2), nsmall = 2)
+view(lex_frq)
+```
+
+#plot frequencies for lexemes 
+```{r}
+lex_frq %>%
+  drop_na(Realisierung)%>%
+  #drop_na(Lexem)%>%
+  ggplot(aes(x=Lexem, y=freq_within_Lex, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~Ort)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Lex, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="Morphem")
+```
+
+#plot frequencies for lexemes (nur über)
+```{r}
+lex_frq %>%
+  drop_na(Realisierung)%>%
+  filter %>%
+  ggplot(aes(x=Lexem, y=freq_within_Lex, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~Ort)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_Lex, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="Morphem")
+```
+
+
+#rel frequencies for V1 Tag
+```{r}
+tag_frq <- clean_df %>%
+  group_by(V1_TAG) %>%  # Group by x-variable first
+    mutate(total_per_TAG = n()) %>%  # Total observations per x-category
+    group_by(V1_TAG, binary)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_TAG = count / first(total_per_TAG), # freq within x-category
+      .groups = "drop",
+    ) 
+
+view(tag_frq)
+
+tag_frq$V1_TAG <- factor(tag_frq$V1_TAG, levels=c("offen", "mittel", "geschlossen","Liquid", ordered=TRUE ))
+tag_frq<- tag_frq %>% filter(binary=="NONPLOS")
+show(tag_frq)
+```
+
+#plot freq for V1 Tag
+```{r}
+tag_frq %>%
+  drop_na(binary)%>%
+  drop_na(V1_TAG)%>%
+  ggplot(aes(x=V1_TAG, y=freq_within_TAG, group=1))+
+    geom_line() + geom_point() +theme_bw() +
+    labs(y="Frequenz der spirantisierten Formen", x= "Grad der Öffnung des vorangegangenen Vokals")
+```
+
+#rel freq v1
+```{r}
+tag1_frq <- clean_df %>%
+  group_by(V1_TAG) %>%  # Group by x-variable first
+    mutate(total_per_TAG = n()) %>%  # Total observations per x-category
+    group_by(V1_TAG, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_TAG = count / first(total_per_TAG), # freq within x-category
+      .groups = "drop",
+    ) 
+
+#view(tag1_frq)
+
+```
+#plot v1 (bar chart)
+```{r}
+tag1_frq %>%
+  drop_na(Realisierung)%>%
+    filter(V1_TAG !="Liquid") %>%
+  ggplot(aes(x= V1_TAG, y=freq_within_TAG, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~V1_Dialektal)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_TAG, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="Öffnungsgrad des vorangegangenen Vokal")
+
+```
+
+
+#rel freq v2
+```{r}
+tag2_frq <- clean_df %>%
+  group_by(V2_TAG) %>%  # Group by x-variable first
+    mutate(total_per_TAG = n()) %>%  # Total observations per x-category
+    group_by(V2_TAG, Realisierung)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_TAG = count / first(total_per_TAG), # freq within x-category
+      .groups = "drop",
+    ) 
+
+#view(tag2_frq)
+
+```
+
+#plot v2 (bar chart)
+```{r}
+tag2_frq %>%
+  drop_na(Realisierung)%>%
+    filter(V2_TAG !="Liquid") %>%
+  ggplot(aes(x= V2_TAG, y=freq_within_TAG, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~V1_Dialektal)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_TAG, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="Öffnungsgrad des nachfolgenden Vokal")
+
+```
+
+
+#plot Liquide only 
+```{r}
+rows <- list()
+
+# Add rows one by one
+rows[[length(rows) + 1]] <- data.frame(V_TAG="vorangegangener Liquid", Realisierung= "b", Count= 20, freq_within_SET= 0.1492537 )
+rows[[length(rows) + 1]] <- data.frame(V_TAG="vorangegangener Liquid", Realisierung="β", Count= 100, freq_within_SET=0.7462687 )
+rows[[length(rows) + 1]]<- data.frame(V_TAG="vorangegangener Liquid", Realisierung="β̞",Count=  14,freq_within_SET= 0.1044776)
+
+rows[[length(rows) + 1]] <-data.frame(V_TAG="nachfolgender Liquid", Realisierung="b", Count= 8, freq_within_SET= 0.33333333 )
+rows[[length(rows) + 1]]<- data.frame(V_TAG="nachfolgender Liquid", Realisierung="β", Count= 15, freq_within_SET= 0.6250000 )
+rows[[length(rows) + 1]]<- data.frame(V_TAG="nachfolgender Liquid", Realisierung="β̞",Count=  1, freq_within_SET= 0.041666676)
+
+tag_frq<- do.call(rbind, rows)
+view(tag_frq)
+
+```
+
+```{r}
+tag_frq %>%
+  drop_na(Realisierung)%>%
+  ggplot(aes(x= V_TAG, y=freq_within_SET, fill=Realisierung))+
+    geom_col(position="stack")+
+    #facet_wrap(~V1_Dialektal)+
+    theme_bw()+
+    scale_fill_manual(values=c("#339966", "#9966FF", "#6600FF"))+
+    geom_text(aes(label=format(round(freq_within_SET, 2), nsmall = 2)), position = position_stack(0.5),check_overlap = TRUE, size = 4)+
+    labs(y="relative Häufigkeit", x="vorangegangener und nachfolgender Liquid")
+```
+
+
+
+#change Realisierung to binary category
+
+```{r}
+clean_df <- clean_df %>% 
+  mutate(binary=ifelse(Realisierung=="b", "PLOS", "NONPLOS"))
+clean_df$binary <- factor(clean_df$binary, levels=c("PLOS", "NONPLOS"))
+
+x1 <- x1 %>% 
+  mutate(binary=ifelse(Realisierung=="b", "PLOS", "NONPLOS"))
+x1$binary <- factor(x1$binary, levels=c("PLOS", "NONPLOS"))
+```
+
+
+```{r}
+x1 <- x1 %>%
+   mutate(Setting = "WSUE1/LESN") 
+contrl_freq <- x1 %>%
+  group_by(Setting, GP) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(GP,Setting, binary)%>%  # Then group by subgroup (am)
+    summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+
+show(contrl_freq)
+
+```
+
+```{r}
+##calculate rel. Freqs per Gp and Setting
+set_frq <- clean_df %>%
+  group_by(Setting, GP) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(GP, Setting, binary)%>%  # Then group by subgroup (am)
+    dplyr::summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+view(set_frq)
+```
+
+
+```{r}
+all_sets_frq <- rbind(set_frq, contrl_freq)
+view(all_sets_frq)
+```
+
+
+#create line plot für frequenz spirantisierte Formen for speakers individually
+```{r}
+
+all_sets_frq<- all_sets_frq %>% filter(binary=="NONPLOS")
+show(all_sets_frq)
+
+all_sets_frq$Setting<-as.character(all_sets_frq$Setting)
+all_sets_frq$binary<-as.character(all_sets_frq$binary)
+
+#view(all_sets_frq)
+
+all_sets_frq %>%
+  drop_na(binary)%>%
+  drop_na(Setting)%>%
+  ggplot(aes(x=Setting, y=freq_within_Set, group=GP, color=GP))+
+    geom_line() + geom_point() +theme_bw() +
+    labs(y="Frequenz der spirantisierten Formen", x= "Setting")
+
+```
+
+
+
+
+#create line plot für frequenz spirantisierte Formen pro Ort
+```{r}
+set_frq <- clean_df %>%
+  group_by(Setting, Ort) %>%  # Group by x-variable first
+    mutate(total_per_Set = n()) %>%  # Total observations per x-category
+    group_by(Setting, Ort, binary)%>%  # Then group by subgroup (am)
+    dplyr::summarize(
+      count = n(),
+      freq_within_Set = count / first(total_per_Set), # freq within x-category
+      .groups = "drop",
+    )
+
+set_frq<- set_frq %>% filter(binary=="NONPLOS")
+show(set_frq)
+
+set_frq$Setting<-as.character(set_frq$Setting)
+set_frq$binary<-as.character(set_frq$binary)
+set_frq$Ort<-as.character(set_frq$Ort)
+
+
+set_frq[nrow(set_frq) + 1,] = list("WSUE1/LESN","GAWE", "NONPLOS", 7, 0.65)
+set_frq[nrow(set_frq) + 1,] = list("WSUE1/LESN", "PASS","NONPLOS", 12, 0.48)
+set_frq[nrow(set_frq) + 1,] = list("WSUE1/LESN", "TUX","NONPLOS", 13, 0.43)
+
+
+set_frq %>%
+  drop_na(binary)%>%
+  drop_na(Setting)%>%
+  ggplot(aes(x=Setting, y=freq_within_Set, group=1))+
+  facet_wrap(~Ort) +
+    geom_line() + geom_point() +theme_bw() +
+    labs(y="Frequenz der spirantisierten Formen", x= "Setting")
+
+```
+
+
+#generalized mixed effects model (binomial)
+```{r}
+# null model (for comparison)
+nullmodel <- glmer(Realisierung ~ 1+(1|GP), data = clean_df, family = binomial)
+summary(nullmodel)
+
+#full model 
+m01 <- glmer(Realisierung ~ V1_Dialektal + Alter+ Gender + Ort +Setting+V1_TAG +V2_TAG +(1|GP), data = clean_df, family = binomial)
+summary(m01, corr = FALSE)
+
+#without insignificant effects 
+m02 <- glmer(Realisierung ~ V1_Dialektal + Ort +Setting+ V1_TAG +(1|GP), data = clean_df, family = binomial)
+summary(m02, corr = FALSE)
+
+```
+
+#convert estimates for FEs to propabilities 
+```{r}
+plogis(-1.28554)
+plogis(-0.41987) 
+plogis(1.22923)
+plogis(-0.62240)
+```
+
+#some performance measures for model
+```{r}
+performance(m01)
+performance(m05)
+```
+
+#likelihood ratio test
+#compares two models (key factors: LogLik should increase, if not model isnt a better fit, p-Value shows significance)
+```{r}
+l_ratio_test <- lrtest(m01, m02)
+l_ratio_test <- lrtest(m05, m06)
+l_ratio_test
+```
+
+
+```{r}
+ag<- aggregate(freq_within_Set ~ Realisierung, set_frq, function(x) c(mean = mean(x), sd = sd(x)))
+view(ag)
+#view(set_frq)
+```
+
+
+
